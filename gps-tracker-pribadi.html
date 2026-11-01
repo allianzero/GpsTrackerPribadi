@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPS Tracker Pribadi</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+body{font-family:system-ui,Arial,sans-serif;margin:0;padding:16px;background:#f4f6f8;color:#111}
+h1{font-size:20px;margin:0 0 8px}
+p{margin:6px 0}
+button{padding:10px 16px;margin:4px 4px 4px 0;border:0;border-radius:8px;cursor:pointer;font-size:15px}
+#start{background:#0a7d33;color:#fff}
+#stop{background:#b00020;color:#fff}
+#export,#clear{background:#ddd}
+#map{height:320px;border-radius:12px;margin:12px 0}
+.card{background:#fff;border-radius:12px;padding:12px;margin:10px 0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{border-bottom:1px solid #eee;padding:6px;text-align:left}
+.small{color:#555;font-size:13px}
+</style>
+</head>
+<body>
+<h1>GPS Tracker Pribadi</h1>
+<p class="small">Hanya untuk perangkatmu sendiri. Lokasi direkam hanya saat kamu menekan Mulai, dan disimpan di browser HP ini saja (localStorage). Tidak dikirim ke server mana pun. Izinkan akses lokasi saat diminta.</p>
+<div class="card">
+<p><b>Status:</b> <span id="status">Berhenti</span></p>
+<p id="err" class="small" style="color:#b00020"></p>
+<p id="diag" class="small"></p>
+<p><b>Posisi sekarang:</b> <span id="pos">-</span></p>
+<p><b>Akurasi:</b> <span id="acc">-</span> &nbsp; <b>Kecepatan:</b> <span id="speed">-</span></p>
+<p><b>Total jarak:</b> <span id="dist">0 m</span> &nbsp; <b>Titik:</b> <span id="count">0</span></p>
+<button id="start">Mulai</button>
+<button id="stop" disabled>Berhenti</button>
+<button id="export">Ekspor CSV</button>
+<button id="clear">Hapus Riwayat</button>
+</div>
+<div id="map"></div>
+<div class="card">
+<h3>Riwayat (terbaru di atas)</h3>
+<table><thead><tr><th>Waktu</th><th>Latitude</th><th>Longitude</th><th>Akurasi</th></tr></thead><tbody id="log"></tbody></table>
+</div>
+<script>
+const KEY='gps-tracker-pribadi-v1';
+let points=JSON.parse(localStorage.getItem(KEY)||'[]');
+let watchId=null, last=null, total=0;
+const map=L.map('map').setView([-6.2,106.8],13);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+let poly=L.polyline([],{color:'#0a7d33'}).addTo(map);
+let marker=null;
+function hav(a,b){const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180;const h=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+function render(){
+  document.getElementById('count').textContent=points.length;
+  document.getElementById('dist').textContent=total>=1000?(total/1000).toFixed(2)+' km':Math.round(total)+' m';
+  document.getElementById('log').innerHTML=points.slice().reverse().slice(0,100).map(p=>`<tr><td>${new Date(p.t).toLocaleString('id-ID')}</td><td>${p.lat.toFixed(6)}</td><td>${p.lon.toFixed(6)}</td><td>${Math.round(p.acc)} m</td></tr>`).join('');
+  poly.setLatLngs(points.map(p=>[p.lat,p.lon]));
+  if(points.length){const l=points[points.length-1]; if(!marker) marker=L.marker([l.lat,l.lon]).addTo(map); else marker.setLatLng([l.lat,l.lon]); map.setView([l.lat,l.lon],16);}
+}
+function recalc(){total=0; for(let i=1;i<points.length;i++) total+=hav(points[i-1],points[i]);}
+recalc(); render(); setTimeout(()=>{try{map.invalidateSize();}catch(e){}},500);
+document.getElementById('diag').textContent='Geolokasi di browser ini: '+('geolocation' in navigator?'tersedia':'TIDAK tersedia')+' | Konteks aman: '+(window.isSecureContext?'ya':'tidak')+' | Protokol: '+location.protocol;
+document.getElementById('start').onclick=()=>{
+  document.getElementById('err').textContent='';
+  if(!('geolocation' in navigator)){document.getElementById('status').textContent='Gagal';document.getElementById('err').textContent='Browser ini tidak mendukung geolokasi. Buka file ini di Chrome, bukan di penampil chat.';return;}
+  document.getElementById('status').textContent='Merekam... menunggu sinyal GPS...';
+  document.getElementById('start').disabled=true; document.getElementById('stop').disabled=false;
+  watchId=navigator.geolocation.watchPosition(p=>{
+    const pt={t:Date.now(),lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,spd:p.coords.speed};
+    if(last) total+=hav(last,pt); last=pt; points.push(pt); localStorage.setItem(KEY,JSON.stringify(points));
+    document.getElementById('pos').textContent=pt.lat.toFixed(6)+', '+pt.lon.toFixed(6);
+    document.getElementById('acc').textContent=Math.round(pt.acc)+' m';
+    document.getElementById('speed').textContent=pt.spd? (pt.spd*3.6).toFixed(1)+' km/jam':'-';
+    render();
+  },e=>{
+    document.getElementById('status').textContent='Gagal membaca lokasi';
+    let msg='Kode: '+e.code+' - '+e.message;
+    if(e.code===1) msg+=' | Izin lokasi ditolak. Buka di Chrome, izinkan Lokasi untuk Chrome di Setelan HP, lalu muat ulang halaman ini.';
+    if(e.code===2) msg+=' | Posisi tidak tersedia. Nyalakan GPS/Lokasi HP dan coba di luar ruangan.';
+    if(e.code===3) msg+=' | Waktu habis menunggu GPS. Coba lagi di tempat dengan sinyal lebih baik.';
+    document.getElementById('err').textContent=msg;
+    document.getElementById('start').disabled=false; document.getElementById('stop').disabled=true;
+  },{enableHighAccuracy:true,maximumAge:5000,timeout:30000});
+};
+document.getElementById('stop').onclick=()=>{
+  if(watchId!==null) navigator.geolocation.clearWatch(watchId); watchId=null; last=null;
+  document.getElementById('status').textContent='Berhenti';
+  document.getElementById('start').disabled=false; document.getElementById('stop').disabled=true;
+};
+document.getElementById('export').onclick=()=>{
+  if(!points.length){alert('Belum ada riwayat.');return;}
+  const csv='waktu,latitude,longitude,akurasi_m,kecepatan_mps\n'+points.map(p=>`${new Date(p.t).toISOString()},${p.lat},${p.lon},${p.acc},${p.spd??''}`).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='gps-tracker-pribadi.csv'; a.click();
+};
+document.getElementById('clear').onclick=()=>{
+  if(!confirm('Hapus semua riwayat di perangkat ini?')) return;
+  points=[]; total=0; last=null; localStorage.removeItem(KEY); render();
+};
+</script>
+</body>
+</html>
